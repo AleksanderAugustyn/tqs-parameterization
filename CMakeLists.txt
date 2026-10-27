@@ -132,7 +132,7 @@ set_target_properties(tqs_param_test_utils PROPERTIES
 target_include_directories(tqs_param_test_utils PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests>)
 
-set(TQS_PARAM_TEST_SUITES status workers)
+set(TQS_PARAM_TEST_SUITES status workers resolve)
 foreach (suite IN LISTS TQS_PARAM_TEST_SUITES)
     add_executable(tqs_param_${suite}_test tests/tqs_param_${suite}_test.f08)
     target_link_libraries(tqs_param_${suite}_test PRIVATE
