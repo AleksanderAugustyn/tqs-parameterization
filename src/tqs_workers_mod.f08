@@ -36,6 +36,10 @@ module tqs_workers_mod
     !> A discriminant negative by less than this fraction of its scale is a
     !! double root: on the coincident family the exact discriminant is zero.
     real(kind = rk), parameter :: QUADRATIC_DISC_TOL = 1.0e-12_rk
+    !> Slack on a ray hit's z against a join: the two segments meeting at a
+    !! join each round their own hit, and a ray exactly at the join angle must
+    !! not fall between them. Lengths are of order 1 (R0 units).
+    real(kind = rk), parameter :: RAY_JOIN_SLACK = 1.0e-12_rk
 
     !---------------------------------------------------------------------------
     ! Middle-body kinds
@@ -90,6 +94,8 @@ module tqs_workers_mod
     public :: neck_s
     public :: poles_s
     public :: moller_coordinates_s
+    public :: ray_radius_s
+    public :: star_margin_f
 
 contains
 
@@ -350,6 +356,109 @@ contains
         r_north = geom%z_north
         r_south = -geom%z_south
     end subroutine poles_s
+
+    !===========================================================================
+    ! R(THETA) AND THE STAR GATE
+    !===========================================================================
+
+    !> R(theta) from the origin by closed-form ray intersection.
+    !!
+    !! The ray z = r cos, rho = r sin on segment i satisfies
+    !!   F(r, theta) = r^2 (sin^2 + k cos^2) - 2 k l cos r + (k l^2 - a_sq) = 0,
+    !! solved in the stable form; the leading coefficient vanishes where the
+    !! ray is parallel to a hyperboloid's asymptotic cone and the equation is
+    !! then linear (solve_quadratic_s handles both). A root counts when r > 0
+    !! and z = r cos lies on the segment's side of its joins (an end spheroid's
+    !! outer bound, its pole, holds automatically on the surface). The first
+    !! survivor in the order end 1, middle, end 2 is R; for a star-convex shape
+    !! it is the only one. dR/dtheta = -F_theta/F_r with
+    !!   F_r = 2 r (sin^2 + k cos^2) - 2 k l cos,
+    !!   F_theta = 2 r sin [r cos (1 - k) + k l].
+    !!
+    !! @param[in]  geom                   Resolved, connected geometry
+    !! @param[in]  cos_theta, sin_theta   The ray direction
+    !! @param[out] r, dr_dtheta           R and dR/dtheta; 0 when not found
+    !! @param[out] found                  .false. if no segment is hit
+    pure subroutine ray_radius_s(geom, cos_theta, sin_theta, r, dr_dtheta, found)
+
+        type(geometry_t), intent(in) :: geom
+        real(kind = rk), intent(in) :: cos_theta, sin_theta
+        real(kind = rk), intent(out) :: r, dr_dtheta
+        logical, intent(out) :: found
+
+        integer(kind = ik), parameter :: ORDER(3) = [1_ik, 3_ik, 2_ik]
+        real(kind = rk) :: a_sq, k, l, lead, roots(2), z_lo, z_hi, z, f_r, f_theta
+        integer(kind = ik) :: j, seg, n_roots, m
+
+        r = 0.0_rk
+        dr_dtheta = 0.0_rk
+        found = .false.
+
+        do j = 1_ik, 3_ik
+            seg = ORDER(j)
+            a_sq = geom%a_sq(seg)
+            k = geom%k(seg)
+            l = geom%l(seg)
+            select case (seg)
+            case (1_ik)
+                z_lo = -huge(1.0_rk)
+                z_hi = geom%z_join(1) + RAY_JOIN_SLACK
+            case (2_ik)
+                z_lo = geom%z_join(2) - RAY_JOIN_SLACK
+                z_hi = huge(1.0_rk)
+            case default
+                z_lo = geom%z_join(1) - RAY_JOIN_SLACK
+                z_hi = geom%z_join(2) + RAY_JOIN_SLACK
+            end select
+
+            lead = sin_theta * sin_theta + k * cos_theta * cos_theta
+            call solve_quadratic_s(lead, -2.0_rk * k * l * cos_theta, k * l * l - a_sq, &
+                    n_roots, roots(1), roots(2))
+            do m = 1_ik, min(n_roots, 2_ik)
+                if (.not. (roots(m) > 0.0_rk)) cycle
+                z = roots(m) * cos_theta
+                if (z < z_lo .or. z > z_hi) cycle
+                r = roots(m)
+                f_r = 2.0_rk * r * lead - 2.0_rk * k * l * cos_theta
+                f_theta = 2.0_rk * r * sin_theta * (r * cos_theta * (1.0_rk - k) + k * l)
+                if (abs(f_r) > 0.0_rk) dr_dtheta = -f_theta / f_r
+                found = .true.
+                return
+            end do
+        end do
+
+    end subroutine ray_radius_s
+
+    !> Star-convexity margin from the origin: min over the shape of
+    !! f(z) = rho - z drho/dz, closed form.
+    !!
+    !! On a segment rho rho' = -k (z - l), so
+    !!   f = (rho^2 + k z (z - l))/rho = (a_sq + k l (z - l))/rho, and
+    !!   f' = [k l rho^2 + (a_sq + k l (z - l)) k (z - l)]/rho^3 = k a_sq z/rho^3:
+    !! the only interior critical point of any segment is z = 0, where
+    !! f = rho(0). At the poles of a connected shape containing the origin f
+    !! tends to +infinity. The minimum is therefore among f at the two joins
+    !! (one segment each suffices, the joins are C1) and rho(0); f(0) is an
+    !! attained value, so including it is safe where it is a maximum (a
+    !! one-sheet middle). Exact, no sampling.
+    !!
+    !! @param[in] geom  Resolved, connected geometry (not separated)
+    !! @return          The margin; the R(theta) outputs need >= STAR_CONVEXITY_MARGIN
+    pure function star_margin_f(geom) result(margin)
+
+        type(geometry_t), intent(in) :: geom
+        real(kind = rk) :: margin
+
+        real(kind = rk) :: rho, drho_dz
+
+        call segment_rho_s(geom%a_sq(1), geom%k(1), geom%l(1), geom%z_join(1), rho, drho_dz)
+        margin = rho - geom%z_join(1) * drho_dz
+        call segment_rho_s(geom%a_sq(2), geom%k(2), geom%l(2), geom%z_join(2), rho, drho_dz)
+        margin = min(margin, rho - geom%z_join(2) * drho_dz)
+        call rho_at_z_s(geom, 0.0_rk, rho, drho_dz)
+        margin = min(margin, rho)
+
+    end function star_margin_f
 
     !===========================================================================
     ! MOLLER COORDINATES
