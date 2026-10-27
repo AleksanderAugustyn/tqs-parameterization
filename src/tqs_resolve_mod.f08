@@ -25,6 +25,12 @@ module tqs_resolve_mod
 
     private
 
+    !> z1 above z2 by at most this (times max(1, |z1|, |z2|), u units) is a
+    !! zero-length middle, not a crossing: where the two end spheroids are
+    !! tangent the l3 quadratic has a double root, z1 = z2 exactly, and
+    !! roundoff (amplified by 1/|k_i - sigma2|) returns either order.
+    real(kind = rk), parameter :: JOIN_ORDER_TOL = 1.0e-10_rk
+
     public :: validate_coordinates_s
     public :: resolve_unit_s
     public :: resolve_s
@@ -201,6 +207,11 @@ contains
             a3_sq = best_a3_sq
             z1 = best_z1
             z2 = best_z2
+            ! A tangent double root: one join, the midpoint of the two roundings.
+            if (z1 > z2) then
+                z1 = 0.5_rk * (z1 + z2)
+                z2 = z1
+            end if
         end if
 
         geom%l(3) = l3
@@ -320,12 +331,13 @@ contains
         z = l_end + s2 * (l_end - l3) / (k_end - s2)
     end function join_z_f
 
-    !> z1 <= z2 and each join strictly inside its end spheroid's z-extent.
+    !> z1 <= z2 (up to JOIN_ORDER_TOL) and each join strictly inside its end
+    !! spheroid's z-extent.
     pure function joins_valid_f(geom, z1, z2) result(ok)
         type(geometry_t), intent(in) :: geom
         real(kind = rk), intent(in) :: z1, z2
         logical :: ok
-        ok = .not. (z1 > z2) &
+        ok = z1 - z2 <= JOIN_ORDER_TOL * max(1.0_rk, abs(z1), abs(z2)) &
                 .and. geom%l(1) - geom%c(1) < z1 .and. z1 < geom%l(1) + geom%c(1) &
                 .and. geom%l(2) - geom%c(2) < z2 .and. z2 < geom%l(2) + geom%c(2)
     end function joins_valid_f
