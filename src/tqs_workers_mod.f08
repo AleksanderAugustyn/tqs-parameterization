@@ -84,6 +84,12 @@ module tqs_workers_mod
     public :: segment_integrals_s
     public :: body_integrals_s
     public :: solve_quadratic_s
+    public :: segment_rho_s
+    public :: rho_at_z_s
+    public :: profile_s
+    public :: neck_s
+    public :: poles_s
+    public :: moller_coordinates_s
 
 contains
 
@@ -231,5 +237,159 @@ contains
         end if
 
     end subroutine solve_quadratic_s
+
+    !===========================================================================
+    ! PROFILE
+    !===========================================================================
+
+    !> One surface: rho = sqrt(a_sq - k (z - l)^2), drho/dz = -k (z - l)/rho.
+    !!
+    !! (0, 0) where rho^2 <= 0: outside the surface's extent, inside a void,
+    !! and at a pole or pinch point, where drho/dz diverges (the fos-param
+    !! convention).
+    pure subroutine segment_rho_s(a_sq, k, l, z, rho, drho_dz)
+
+        real(kind = rk), intent(in) :: a_sq, k, l, z
+        real(kind = rk), intent(out) :: rho, drho_dz
+
+        real(kind = rk) :: rho_sq
+
+        rho_sq = a_sq - k * (z - l)**2
+        if (rho_sq > 0.0_rk) then
+            rho = sqrt(rho_sq)
+            drho_dz = -k * (z - l) / rho
+        else
+            rho = 0.0_rk
+            drho_dz = 0.0_rk
+        end if
+
+    end subroutine segment_rho_s
+
+    !> rho and drho/dz of the body at z: end 1 for z <= z_join(1), end 2 for
+    !! z >= z_join(2), the middle between.
+    pure subroutine rho_at_z_s(geom, z, rho, drho_dz)
+
+        type(geometry_t), intent(in) :: geom
+        real(kind = rk), intent(in) :: z
+        real(kind = rk), intent(out) :: rho, drho_dz
+
+        integer(kind = ik) :: seg
+
+        if (z <= geom%z_join(1)) then
+            seg = 1_ik
+        else if (z >= geom%z_join(2)) then
+            seg = 2_ik
+        else
+            seg = 3_ik
+        end if
+        call segment_rho_s(geom%a_sq(seg), geom%k(seg), geom%l(seg), z, rho, drho_dz)
+
+    end subroutine rho_at_z_s
+
+    !> The profile on size(z) uniform nodes over [z_south, z_north].
+    !!
+    !! Node j sits at z_south + (z_north - z_south) * (j - 1)/(n - 1), the
+    !! fraction formed first so a symmetric shape puts its middle node at
+    !! exactly 0; z(1) and z(n) are the poles exactly, with (0, 0) there.
+    !!
+    !! @param[in]  geom     Resolved geometry
+    !! @param[out] z        Nodes; size >= 2 (the caller checks the floor)
+    !! @param[out] rho      rho(z), size(z) long
+    !! @param[out] drho_dz  drho/dz, size(z) long
+    pure subroutine profile_s(geom, z, rho, drho_dz)
+
+        type(geometry_t), intent(in) :: geom
+        real(kind = rk), intent(out) :: z(:), rho(:), drho_dz(:)
+
+        integer(kind = ik) :: n, j
+        real(kind = rk) :: span
+
+        n = size(z, kind = ik)
+        span = geom%z_north - geom%z_south
+        z(1) = geom%z_south
+        rho(1) = 0.0_rk
+        drho_dz(1) = 0.0_rk
+        do j = 2_ik, n - 1_ik
+            z(j) = geom%z_south + span * (real(j - 1_ik, rk) / real(n - 1_ik, rk))
+            call rho_at_z_s(geom, z(j), rho(j), drho_dz(j))
+        end do
+        z(n) = geom%z_north
+        rho(n) = 0.0_rk
+        drho_dz(n) = 0.0_rk
+
+    end subroutine profile_s
+
+    !===========================================================================
+    ! NECK AND POLES
+    !===========================================================================
+
+    !> The waist of a middle body with sigma2 < 0 whose waist lies strictly
+    !! inside it: z_neck = l3; rho_neck = a3 for a one-sheet middle, 0 for a
+    !! pinched or separated one (the split plane). Otherwise found = .false.
+    !! and both outputs are 0.
+    pure subroutine neck_s(geom, z_neck, rho_neck, found)
+
+        type(geometry_t), intent(in) :: geom
+        real(kind = rk), intent(out) :: z_neck, rho_neck
+        logical, intent(out) :: found
+
+        z_neck = 0.0_rk
+        rho_neck = 0.0_rk
+        found = geom%k(3) < 0.0_rk .and. geom%waist_inside
+        if (.not. found) return
+
+        z_neck = geom%l(3)
+        if (geom%mid_kind == TQS_MID_ONE_SHEET) rho_neck = sqrt(geom%a_sq(3))
+
+    end subroutine neck_s
+
+    !> Pole radii from the centre of mass: r_north = z_north, r_south = -z_south.
+    pure subroutine poles_s(geom, r_north, r_south)
+        type(geometry_t), intent(in) :: geom
+        real(kind = rk), intent(out) :: r_north, r_south
+        r_north = geom%z_north
+        r_south = -geom%z_south
+    end subroutine poles_s
+
+    !===========================================================================
+    ! MOLLER COORDINATES
+    !===========================================================================
+
+    !> Moller's grid coordinates of a resolved shape (R0 = 1 units).
+    !!
+    !! q2 = <r^2 P2(cos theta)> over the volume = 3/4 int (z^2 rho^2 - rho^4/4) dz.
+    !! d: 2 a3 for a necked one-sheet middle, 0 when pinched or separated,
+    !! otherwise the narrowest diameter of the middle body, which sits at a
+    !! join (a spheroid arc is narrowest at an end, a flare is monotone).
+    !! alpha_g = (a1^2 c1 - a2^2 c2)/(a1^2 c1 + a2^2 c2) (eq. 10).
+    !! eps_i = 3 (1 - a_i/c_i)/(2 + a_i/c_i), inverting eqs. 6-7, a_i/c_i = sqrt(k_i).
+    pure subroutine moller_coordinates_s(geom, q2, d, alpha_g, eps_f1, eps_f2)
+
+        type(geometry_t), intent(in) :: geom
+        real(kind = rk), intent(out) :: q2, d, alpha_g, eps_f1, eps_f2
+
+        real(kind = rk) :: i0, i1, i2, i4, v1, v2, r1, r2, dummy
+
+        call body_integrals_s(geom, i0, i1, i2, i4)
+        q2 = 0.75_rk * (i2 - 0.25_rk * i4)
+
+        if (geom%is_pinched .or. geom%is_separated) then
+            d = 0.0_rk
+        else if (geom%mid_kind == TQS_MID_ONE_SHEET .and. geom%waist_inside) then
+            d = 2.0_rk * sqrt(geom%a_sq(3))
+        else
+            call rho_at_z_s(geom, geom%z_join(1), r1, dummy)
+            call rho_at_z_s(geom, geom%z_join(2), r2, dummy)
+            d = 2.0_rk * min(r1, r2)
+        end if
+
+        v1 = geom%a_sq(1) * geom%c(1)
+        v2 = geom%a_sq(2) * geom%c(2)
+        alpha_g = (v1 - v2) / (v1 + v2)
+
+        eps_f1 = 3.0_rk * (1.0_rk - sqrt(geom%k(1))) / (2.0_rk + sqrt(geom%k(1)))
+        eps_f2 = 3.0_rk * (1.0_rk - sqrt(geom%k(2))) / (2.0_rk + sqrt(geom%k(2)))
+
+    end subroutine moller_coordinates_s
 
 end module tqs_workers_mod

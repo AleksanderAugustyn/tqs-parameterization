@@ -347,7 +347,10 @@ contains
         else if (.not. (abs(s2) > 0.0_rk)) then
             geom%mid_kind = TQS_MID_CYLINDER
         else if (abs(a3_sq) <= TQS_PINCH_TOL) then
+            ! Counted as zero, and stored as zero: the middle is the exact
+            ! cone, so a pinch point is rho = 0 whatever sign roundoff gave.
             geom%mid_kind = TQS_MID_CONE
+            geom%a_sq(3) = 0.0_rk
             geom%is_pinched = geom%waist_inside
         else if (a3_sq > 0.0_rk) then
             geom%mid_kind = TQS_MID_ONE_SHEET
