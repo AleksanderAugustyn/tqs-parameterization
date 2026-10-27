@@ -31,8 +31,19 @@ module tqs_workers_mod
     real(kind = rk), parameter, public :: TQS_PINCH_TOL = 1.0e-12_rk
     !> |k_i - sigma2| at or below this counts as equal (degenerate curvature).
     real(kind = rk), parameter, public :: TQS_DEGENERATE_TOL = 1.0e-4_rk
-    !> |a3^2 - a_i^2| <= tol * max(1, a_i^2) is accepted as surface coincidence.
-    real(kind = rk), parameter, public :: TQS_COINCIDENCE_TOL = 1.0e-3_rk
+    !> A degenerate end coincides with the middle when the rho^2 mismatch of the
+    !! two end surfaces at their shared join is at most tol * max(1, a_i^2).
+    !! On a true (tangent) coincident family the mismatch is O((k_i - sigma2)^2),
+    !! below 1e-7 inside TQS_DEGENERATE_TOL; surfaces that merely have close
+    !! a_i^2 leave a visible step in rho.
+    real(kind = rk), parameter, public :: TQS_COINCIDENCE_TOL = 1.0e-6_rk
+    !> |l3 - (l1 + l2)/2| above this (u units) is code 101. Near sigma2 = 0 with
+    !! alpha2 /= 0 the waist runs off like alpha2/sigma2 and a3^2 like 1/sigma2;
+    !! the middle a3^2 - sigma2 (z - l3)^2 is then a difference of huge terms
+    !! and the centre of mass loses ~eps * offset^2. At 1e3 that is ~1e-11 R0;
+    !! the rejected band is |sigma2| below ~1e-4, around the sigma2 = 0 point
+    !! that is already 101 when alpha2 /= 0.
+    real(kind = rk), parameter, public :: TQS_MAX_WAIST_OFFSET = 1.0e3_rk
     !> A discriminant negative by less than this fraction of its scale is a
     !! double root: on the coincident family the exact discriminant is zero.
     real(kind = rk), parameter :: QUADRATIC_DISC_TOL = 1.0e-12_rk

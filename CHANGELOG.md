@@ -35,9 +35,14 @@ Calls made in this release (owner-visible):
   `tqs_param_geometry_t`, Python `Geometry`).
 - A cylinder middle (sigma2 = 0) has l3 = (l1 + l2)/2.
 - Degenerate curvature: |k_i - sigma2| <= 1e-4 counts as equal and is
-  accepted only as surface coincidence, |a3^2 - a_i^2| <= 1e-3 max(1, a_i^2);
-  both ends degenerate only on the exact spheroid line sigma1 = alpha2 = 0. A
-  discriminant negative by under 1e-12 of its scale is a double root.
+  accepted only as surface coincidence: the two end surfaces meet at the
+  shared join to within 1e-6 max(1, a_i^2) in rho^2. Both ends degenerate only
+  on the exact spheroid line sigma1 = alpha2 = 0. A discriminant negative by
+  under 1e-12 of its scale is a double root.
+- A waist farther than 1e3 u from the end-centre midpoint is code 101: near
+  sigma2 = 0 with alpha2 /= 0 the closed form cancels catastrophically, so the
+  101 point the cylinder rule already gives widens to |sigma2| below ~1e-4.
+- `waist_inside` is set only for a sigma2 < 0 middle.
 - Where the end spheroids are tangent the joins coincide; z1 above z2 by at
   most 1e-10 (roundoff) is one join, not a rejection.
 - A cone middle (|a3^2| <= 1e-12) stores a3^2 = 0, so a pinch point is rho = 0

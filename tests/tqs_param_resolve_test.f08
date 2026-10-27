@@ -163,6 +163,10 @@ contains
         type(geometry_t) :: geom
         call unit_ok(SPHEROID_MID, geom, 'R8 SPHEROID_MID')
         call assert_int_eq(geom%mid_kind, TQS_MID_SPHEROID, 'R8 SPHEROID_MID spheroid')
+        ! waist_inside is a sigma2 < 0 notion: a convex middle has no waist.
+        call assert_true(.not. geom%waist_inside, 'R8 SPHEROID_MID waist_inside false')
+        call unit_ok(CYLINDER, geom, 'R8 CYLINDER')
+        call assert_true(.not. geom%waist_inside, 'R8 CYLINDER waist_inside false')
         call unit_ok(SYM_NECKED, geom, 'R8 SYM_NECKED')
         call assert_int_eq(geom%mid_kind, TQS_MID_ONE_SHEET, 'R8 SYM_NECKED one_sheet')
         call assert_true(geom%waist_inside, 'R8 SYM_NECKED waist inside')

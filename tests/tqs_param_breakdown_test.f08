@@ -6,6 +6,7 @@
 program tqs_param_breakdown_test
     use precision_utilities_mod, only: ik, rk
     use mathematical_and_physical_constants_mod, only: PI_C
+    use mathematical_utilities_mod, only: compute_gauss_legendre_quadrature_s
     use tqs_workers_mod, only: geometry_t, body_integrals_s, star_margin_f
     use tqs_resolve_mod, only: resolve_unit_s, resolve_s
     use tqs_parameterization_mod, only: compute_radius_grid_standalone_s, &
@@ -37,6 +38,8 @@ program tqs_param_breakdown_test
     call test_k9_large_coordinates()
     call test_k10_star_margin_edge()
     call test_k11_both_pass_count()
+    call test_k12_sigma2_to_zero_asymmetric()
+    call test_k13_coincidence_is_a_join_residual()
 
     call test_summary()
 
@@ -302,5 +305,108 @@ contains
                 ' points (valid ', n_ok, ')'
         call assert_int_eq(n_points, 110565_ik, 'K11 box size')
     end subroutine test_k11_both_pass_count
+
+    !> Volume and centre of mass of a resolved geometry with the middle body
+    !! written from its south join, rho3^2 = P + Q (z - z1) - sigma2 (z - z1)^2
+    !! (P, Q from end 1 at z1), so every coefficient is O(1) however far the
+    !! waist l3 is: an oracle independent of the library's (a3^2, l3) form.
+    !! 64-node Gauss-Legendre per segment (degree <= 3 integrands: exact).
+    subroutine anchored_moments(g, vol, z_cm)
+        type(geometry_t), intent(in) :: g
+        real(kind = rk), intent(out) :: vol, z_cm
+        integer(kind = ik), parameter :: N_GL = 64_ik
+        integer(kind = ik), parameter :: SEGS(3) = [1_ik, 3_ik, 2_ik]
+        real(kind = rk) :: x(N_GL), wt(N_GL), m0, m1, p0, q0, lo(3), hi(3), half, mid, z, rho_sq
+        integer(kind = ik) :: s, j
+        call compute_gauss_legendre_quadrature_s(N_GL, x, wt)
+        p0 = g%a_sq(1) - g%k(1) * (g%z_join(1) - g%l(1))**2
+        q0 = -2.0_rk * g%k(1) * (g%z_join(1) - g%l(1))
+        lo(1) = g%z_south
+        hi(1) = g%z_join(1)
+        lo(2) = g%z_join(1)
+        hi(2) = g%z_join(2)
+        lo(3) = g%z_join(2)
+        hi(3) = g%z_north
+        m0 = 0.0_rk
+        m1 = 0.0_rk
+        do s = 1_ik, 3_ik
+            half = 0.5_rk * (hi(s) - lo(s))
+            mid = 0.5_rk * (hi(s) + lo(s))
+            do j = 1_ik, N_GL
+                z = mid + half * x(j)
+                if (SEGS(s) == 3_ik) then
+                    rho_sq = p0 + q0 * (z - g%z_join(1)) - g%k(3) * (z - g%z_join(1))**2
+                else
+                    rho_sq = g%a_sq(SEGS(s)) - g%k(SEGS(s)) * (z - g%l(SEGS(s)))**2
+                end if
+                m0 = m0 + half * wt(j) * rho_sq
+                m1 = m1 + half * wt(j) * z * rho_sq
+            end do
+        end do
+        vol = PI_C * m0
+        z_cm = m1 / m0
+    end subroutine anchored_moments
+
+    !> sigma2 -> 0 with alpha2 /= 0: l3 and a3^2 diverge like 1/sigma2 and the
+    !! middle's coefficients cancel. Every point is either 101 or a geometry
+    !! whose volume and centre of mass hold against the anchored oracle.
+    subroutine test_k12_sigma2_to_zero_asymmetric()
+        real(kind = rk), parameter :: BASES(5, 3) = reshape([0.6_rk, 0.0_rk, 1.0_rk, 0.2_rk, 0.3_rk, &
+                0.8_rk, 0.0_rk, 1.0_rk, 0.05_rk, 0.1_rk, 1.6_rk, 0.0_rk, 1.0_rk, 0.8_rk, 0.2_rk], [5, 3])
+        real(kind = rk), parameter :: S2(14) = [1.0e-4_rk, -1.0e-4_rk, 1.0e-5_rk, -1.0e-5_rk, &
+                1.0e-6_rk, -1.0e-6_rk, 1.0e-8_rk, -1.0e-8_rk, 1.0e-10_rk, -1.0e-10_rk, 1.0e-14_rk, &
+                -1.0e-14_rk, 2.2e-16_rk, -2.2e-16_rk]
+        type(geometry_t) :: g
+        real(kind = rk) :: p(5), vol, z_cm
+        integer(kind = ik) :: b, j, status, n_bad, n_rejected
+        n_bad = 0_ik
+        n_rejected = 0_ik
+        do b = 1_ik, 3_ik
+            do j = 1_ik, size(S2, kind = ik)
+                p = BASES(:, b)
+                p(2) = S2(j)
+                call resolve_s(p, g, status)
+                if (status == TQS_ERROR_NO_GEOMETRY) then
+                    n_rejected = n_rejected + 1_ik
+                    cycle
+                end if
+                call anchored_moments(g, vol, z_cm)
+                if (status /= 0_ik .or. abs(vol - 4.0_rk * PI_C / 3.0_rk) > 1.0e-11_rk &
+                        .or. abs(z_cm) > 1.0e-10_rk) then
+                    n_bad = n_bad + 1_ik
+                    write(*, '(A,5ES11.3,A,I0,2ES11.3)') '   K12 bad: ', p, ' status ', status, &
+                            vol - 4.0_rk * PI_C / 3.0_rk, z_cm
+                end if
+            end do
+        end do
+        write(*, '(A,I0,A)') 'K12 sigma2 -> 0, alpha2 /= 0: ', n_rejected, ' of 42 points rejected (101)'
+        call assert_int_eq(n_bad, 0_ik, 'K12 every accepted point has the anchored volume and centre of mass')
+        call assert_true(n_rejected > 0_ik .and. n_rejected < 42_ik, 'K12 a narrow band is rejected, not all')
+    end subroutine test_k12_sigma2_to_zero_asymmetric
+
+    !> The coincidence of a degenerate end is judged by the rho^2 mismatch at
+    !! the shared join: surfaces that do not meet are 101, tangent families valid.
+    subroutine test_k13_coincidence_is_a_join_residual()
+        real(kind = rk), parameter :: DS(5) = [0.0_rk, 1.0e-5_rk, -1.0e-5_rk, 5.0e-5_rk, -5.0e-5_rk]
+        type(geometry_t) :: g
+        real(kind = rk) :: p(5)
+        integer(kind = ik) :: j, status
+        character(len = 40) :: tag
+        p = pv(0.5_rk, 2.0_rk, 1.5_rk, -0.5004_rk, 1.0_rk)
+        call resolve_s(p, g, status)
+        call assert_int_eq(status, TQS_ERROR_NO_GEOMETRY, 'K13 [0.5, 2, 1.5, -0.5004, 1]: surfaces 4e-4 apart -> 101')
+        p = pv(0.05_rk, 1.2_rk, 1.25_rk, 0.04_rk, -0.1_rk)
+        call resolve_s(p, g, status)
+        call assert_int_eq(status, TQS_ERROR_NO_GEOMETRY, 'K13 [0.05, 1.2, 1.25, 0.04, -0.1]: 1e-3 apart -> 101')
+        do j = 1_ik, size(DS, kind = ik)
+            write(tag, '(A,ES9.1)') 'K13 tangent families d = ', DS(j)
+            p = pv(0.4_rk, 1.2_rk + DS(j), 1.0_rk, -0.384_rk, 0.4_rk)
+            call resolve_s(p, g, status)
+            call assert_int_eq(status, 0_ik, trim(tag) // ': end 1 degenerate, valid')
+            p = pv(0.4_rk, 0.8_rk + DS(j), 1.0_rk, -0.384_rk, 0.4_rk)
+            call resolve_s(p, g, status)
+            call assert_int_eq(status, 0_ik, trim(tag) // ': end 2 degenerate, valid')
+        end do
+    end subroutine test_k13_coincidence_is_a_join_residual
 
 end program tqs_param_breakdown_test

@@ -10,14 +10,14 @@
 !!
 !! Degenerate curvature (an end with the middle's curvature, |k_i - sigma2|
 !! at or below TQS_DEGENERATE_TOL) has no join of its own: the only
-!! consistent limit is the two surfaces coinciding, accepted when the other
-!! join's a3^2 matches a_i^2 within TQS_COINCIDENCE_TOL.
+!! consistent limit is the two surfaces coinciding, accepted when the two end
+!! surfaces meet at the shared join to within TQS_COINCIDENCE_TOL in rho^2.
 module tqs_resolve_mod
 
     use precision_utilities_mod, only: ik, rk
     use shape_core_mod, only: SHAPE_VALID
     use tqs_workers_mod, only: geometry_t, solve_quadratic_s, body_integrals_s, TQS_PINCH_TOL, &
-            TQS_DEGENERATE_TOL, TQS_COINCIDENCE_TOL, TQS_MID_SPHEROID, &
+            TQS_DEGENERATE_TOL, TQS_COINCIDENCE_TOL, TQS_MAX_WAIST_OFFSET, TQS_MID_SPHEROID, &
             TQS_MID_CYLINDER, TQS_MID_ONE_SHEET, TQS_MID_CONE, TQS_MID_TWO_SHEET, &
             TQS_ERROR_INVALID_COORDINATES, TQS_ERROR_NO_GEOMETRY
 
@@ -132,7 +132,10 @@ contains
         else if (deg(1) .or. deg(2)) then
             ! One degenerate end i: its surface must coincide with the middle.
             ! l3 = l_i, a3^2 from the other join j; the coincident join is
-            ! arbitrary on the shared surface and is set equal to join j.
+            ! arbitrary on the shared surface and is set equal to join j, so
+            ! the shape is end i meeting end j there. Coincidence is judged by
+            ! how well they meet: the rho^2 mismatch of the two end surfaces at
+            ! that join, which a close a3^2 alone does not bound.
             if (deg(1)) then
                 i_deg = 1_ik
                 j_oth = 2_ik
@@ -142,12 +145,14 @@ contains
             end if
             l3 = geom%l(i_deg)
             a3_sq = geom%a_sq(j_oth) + join_g_f(geom%k(j_oth), s2) * (l3 - geom%l(j_oth))**2
-            if (abs(a3_sq - geom%a_sq(i_deg)) > TQS_COINCIDENCE_TOL * max(1.0_rk, geom%a_sq(i_deg))) then
+            z2 = join_z_f(geom%k(j_oth), geom%l(j_oth), s2, l3)
+            z1 = z2
+            if (abs(geom%a_sq(i_deg) - geom%k(i_deg) * (z2 - geom%l(i_deg))**2 &
+                    - geom%a_sq(j_oth) + geom%k(j_oth) * (z2 - geom%l(j_oth))**2) &
+                    > TQS_COINCIDENCE_TOL * max(1.0_rk, geom%a_sq(i_deg))) then
                 call fail_s(geom, status)
                 return
             end if
-            z2 = join_z_f(geom%k(j_oth), geom%l(j_oth), s2, l3)
-            z1 = z2
             if (.not. joins_valid_f(geom, z1, z2)) then
                 call fail_s(geom, status)
                 return
@@ -186,7 +191,7 @@ contains
                 l3 = cand(j)
                 z1 = join_z_f(geom%k(1), geom%l(1), s2, l3)
                 z2 = join_z_f(geom%k(2), geom%l(2), s2, l3)
-                ok = joins_valid_f(geom, z1, z2)
+                ok = joins_valid_f(geom, z1, z2) .and. abs(l3 - l_mid) <= TQS_MAX_WAIST_OFFSET
                 if (.not. ok) cycle
                 n_valid = n_valid + 1_ik
                 ! Both pass: the root nearer the end-centre midpoint.
@@ -351,8 +356,11 @@ contains
 
         s2 = geom%k(3)
         a3_sq = geom%a_sq(3)
-        ! Strict: a zero-length middle or a waist on a join is never inside.
-        geom%waist_inside = geom%z_join(1) < geom%l(3) .and. geom%l(3) < geom%z_join(2)
+        ! A waist exists only for sigma2 < 0 (a convex middle has an equator,
+        ! not a waist). Strict: a zero-length middle or a waist on a join is
+        ! never inside.
+        geom%waist_inside = s2 < 0.0_rk .and. geom%z_join(1) < geom%l(3) &
+                .and. geom%l(3) < geom%z_join(2)
 
         if (s2 > 0.0_rk) then
             geom%mid_kind = TQS_MID_SPHEROID

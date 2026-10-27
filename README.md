@@ -40,8 +40,9 @@ the centre of mass at the origin and works in R0 = 1 units (volume 4 pi/3);
 Nix's alpha1 = (l1 + l2)/(2u) is reported, not taken. It has no notion of A, Z
 or N.
 
-The middle body is classified by sigma2, by a3^2, and by whether its waist l3
-lies strictly inside (z1, z2):
+The middle body is classified by sigma2, by a3^2, and, for sigma2 < 0, by
+whether its waist l3 lies strictly inside (z1, z2) (`waist_inside`; always
+false for a spheroid or cylinder middle):
 
 | `mid_kind` | Condition | Shape |
 |---|---|---|
@@ -61,9 +62,15 @@ Two rules worth knowing:
 
 - **Degenerate curvature.** An end whose curvature equals the middle's
   (|k_i - sigma2| <= 1e-4) has no join of its own; it is accepted only as the
-  two surfaces coinciding (a3^2 within 1e-3 of a_i^2), with a zero-length
-  middle. Consequently the sphere and spheroids are isolated points on the
-  line sigma2 = sigma3, alpha3 = 0: any sigma1 > 0 there is code 101.
+  two surfaces coinciding, with a zero-length middle: the two end surfaces
+  must meet at the shared join to within 1e-6 in rho^2. Consequently the
+  sphere and spheroids are isolated points on the line sigma2 = sigma3,
+  alpha3 = 0: any sigma1 > 0 there is code 101.
+- **sigma2 near 0 with alpha2 /= 0.** A cylinder middle needs alpha2 = 0, so
+  sigma2 = 0 with alpha2 /= 0 is code 101. Beside it the waist runs off to
+  |l3| ~ alpha2/sigma2 and the closed form loses accuracy, so a waist farther
+  than 1e3 (in units of u) from the end-centre midpoint is code 101 as well:
+  a band of |sigma2| below about 1e-4 around the point that is already 101.
 - **The root rule is a guard.** The joins reduce to a quadratic in l3. If
   both roots gave a valid geometry the library would take the one nearer the
   end-centre midpoint; over the 110,565-point test box this never happens.
