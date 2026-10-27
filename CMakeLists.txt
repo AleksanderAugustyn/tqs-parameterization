@@ -144,6 +144,14 @@ foreach (suite IN LISTS TQS_PARAM_TEST_SUITES)
     add_test(NAME ${suite} COMMAND tqs_param_${suite}_test)
 endforeach ()
 
+# Golden capture: prints paste-ready Python goldens through the C entries.
+# Not a ctest; the recapture procedure is in the file header.
+add_executable(tqs_param_golden_capture tests/golden_capture.f08)
+target_link_libraries(tqs_param_golden_capture PRIVATE
+        tqs_parameterization tqs_param_test_utils tqs_parameterization_flags)
+set_target_properties(tqs_param_golden_capture PROPERTIES
+        Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests/capture)
+
 add_executable(tqs_param_c_api_smoke_test tests/c_api_smoke_test.cpp)
 target_link_libraries(tqs_param_c_api_smoke_test PRIVATE tqs_parameterization_cxx)
 add_test(NAME c_api_smoke COMMAND tqs_param_c_api_smoke_test)
