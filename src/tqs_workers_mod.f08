@@ -96,6 +96,7 @@ module tqs_workers_mod
     public :: moller_coordinates_s
     public :: ray_radius_s
     public :: star_margin_f
+    public :: theta_trig_s
 
 contains
 
@@ -360,6 +361,19 @@ contains
     !===========================================================================
     ! R(THETA) AND THE STAR GATE
     !===========================================================================
+
+    !> cos and sin of a theta set. The cache's primary set and a caller's
+    !! at-thetas set both go through this one kernel, so the same thetas give
+    !! the same bits on either path.
+    pure subroutine theta_trig_s(thetas, cos_t, sin_t)
+        real(kind = rk), intent(in) :: thetas(:)
+        real(kind = rk), intent(out) :: cos_t(:), sin_t(:)
+        integer(kind = ik) :: i
+        do i = 1_ik, size(thetas, kind = ik)
+            cos_t(i) = cos(thetas(i))
+            sin_t(i) = sin(thetas(i))
+        end do
+    end subroutine theta_trig_s
 
     !> R(theta) from the origin by closed-form ray intersection.
     !!

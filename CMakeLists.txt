@@ -124,6 +124,7 @@ if (TQS_PARAM_BUILD_TESTS)
 add_library(tqs_param_test_utils STATIC
         tests/test_utils_mod.f08
         tests/tqs_test_fixtures_mod.f08
+        tests/tqs_test_tiers_mod.f08
 )
 target_link_libraries(tqs_param_test_utils
         PUBLIC tqs_parameterization fortran_foundations
@@ -133,7 +134,7 @@ set_target_properties(tqs_param_test_utils PROPERTIES
 target_include_directories(tqs_param_test_utils PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests>)
 
-set(TQS_PARAM_TEST_SUITES status workers resolve core neck moments rtheta)
+set(TQS_PARAM_TEST_SUITES status workers resolve core neck moments rtheta error boundary)
 foreach (suite IN LISTS TQS_PARAM_TEST_SUITES)
     add_executable(tqs_param_${suite}_test tests/tqs_param_${suite}_test.f08)
     target_link_libraries(tqs_param_${suite}_test PRIVATE
