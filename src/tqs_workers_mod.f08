@@ -37,13 +37,6 @@ module tqs_workers_mod
     !! below 1e-7 inside TQS_DEGENERATE_TOL; surfaces that merely have close
     !! a_i^2 leave a visible step in rho.
     real(kind = rk), parameter, public :: TQS_COINCIDENCE_TOL = 1.0e-6_rk
-    !> |l3 - (l1 + l2)/2| above this (u units) is code 101. Near sigma2 = 0 with
-    !! alpha2 /= 0 the waist runs off like alpha2/sigma2 and a3^2 like 1/sigma2;
-    !! the middle a3^2 - sigma2 (z - l3)^2 is then a difference of huge terms
-    !! and the centre of mass loses ~eps * offset^2. At 1e3 that is ~1e-11 R0;
-    !! the rejected band is |sigma2| below ~1e-4, around the sigma2 = 0 point
-    !! that is already 101 when alpha2 /= 0.
-    real(kind = rk), parameter, public :: TQS_MAX_WAIST_OFFSET = 1.0e3_rk
     !> A discriminant negative by less than this fraction of its scale is a
     !! double root: on the coincident family the exact discriminant is zero.
     real(kind = rk), parameter :: QUADRATIC_DISC_TOL = 1.0e-12_rk
@@ -51,6 +44,13 @@ module tqs_workers_mod
     !! join each round their own hit, and a ray exactly at the join angle must
     !! not fall between them. Lengths are of order 1 (R0 units).
     real(kind = rk), parameter :: RAY_JOIN_SLACK = 1.0e-12_rk
+    !> When no hit lies on its segment (a ray through the sliver a degenerate,
+    !! coincident join leaves: the two end surfaces meet only to
+    !! TQS_COINCIDENCE_TOL in rho^2), the hit nearest its segment is taken if
+    !! it lies within this of it. The sliver is at most ~1e-6 / (2 rho) wide in
+    !! rho and the star margin (>= 1e-2) bounds the ray's slope against the
+    !! surface, so a hit misses its segment by well under 1e-3.
+    real(kind = rk), parameter :: RAY_GAP_SLACK = 1.0e-3_rk
 
     !---------------------------------------------------------------------------
     ! Middle-body kinds
@@ -80,6 +80,13 @@ module tqs_workers_mod
     !! [z_join(1), z_join(2)], 2 the north end spheroid on [z_join(2), z_north].
     !! c(i) = sqrt(a_sq(i)/k(i)) are the end semi-axes along z. Lengths are in
     !! units of u until the resolve rescales them; u is Nix's scale.
+    !!
+    !! The middle is EVALUATED as rho^2 = mid_c0 + mid_c1 t - k(3) t^2 with
+    !! t = z - mid_ref: about its own waist (mid_ref = l(3), mid_c0 = a_sq(3),
+    !! mid_c1 = 0) normally, and about its south join when the waist is far
+    !! away (near sigma2 = 0 with alpha2 /= 0 it runs off like 1/sigma2 and
+    !! a_sq(3) - k(3) (z - l(3))^2 would be a difference of huge terms).
+    !! l(3) and a_sq(3) stay the physical waist and its rho^2.
     type, public :: geometry_t
         real(kind = rk) :: u = 0.0_rk
         real(kind = rk) :: a_sq(3) = 0.0_rk
@@ -90,6 +97,9 @@ module tqs_workers_mod
         real(kind = rk) :: z_south = 0.0_rk
         real(kind = rk) :: z_north = 0.0_rk
         real(kind = rk) :: w = 0.0_rk            !! Half-width of the void, 0 unless is_separated
+        real(kind = rk) :: mid_ref = 0.0_rk      !! Anchor of the middle's evaluation form
+        real(kind = rk) :: mid_c0 = 0.0_rk       !! rho^2 of the middle at mid_ref
+        real(kind = rk) :: mid_c1 = 0.0_rk       !! d(rho^2)/dz of the middle at mid_ref
         integer(kind = ik) :: mid_kind = TQS_MID_NONE
         logical :: waist_inside = .false.
         logical :: is_separated = .false.
@@ -115,41 +125,48 @@ contains
     ! INTEGRALS
     !===========================================================================
 
-    !> Moments of one surface rho^2 = a_sq - k (z - l)^2 over [z_lo, z_hi].
+    !> Moments of one surface rho^2 = c0 + c1 t - k t^2, t = z - z_ref, over
+    !! [z_lo, z_hi] (an end spheroid has z_ref = l, c0 = a^2, c1 = 0).
     !!
-    !! Every integral is written as (z_hi - z_lo) * P(t_lo, t_hi) with
-    !! t = z - l, never as a difference of primitives F(t_hi) - F(t_lo): the
-    !! difference cancels catastrophically when |t| is large (sigma1 = 1e8
-    !! loses every digit), the factored form does not. The moments in z follow
-    !! from the moments in t by the binomial shift, which only multiplies.
+    !! Every integral is written as (z_hi - z_lo) * P(t_lo, t_hi), never as a
+    !! difference of primitives F(t_hi) - F(t_lo): the difference cancels
+    !! catastrophically when |t| is large (sigma1 = 1e8 loses every digit), the
+    !! factored form does not. With e_m the interval mean of t^m,
+    !!   e1 = (ta + tb)/2, e2 = (tb^2 + tb ta + ta^2)/3,
+    !!   e3 = (ta + tb)(ta^2 + tb^2)/4, e4 = (tb^4 + tb^3 ta + ... + ta^4)/5,
+    !! the moments in t are d (c0 e_m + c1 e_(m+1) - k e_(m+2)); the moments in
+    !! z follow by the binomial shift, which only multiplies.
     !!
-    !! @param[in]  a_sq, k, l  The surface
-    !! @param[in]  z_lo, z_hi  The interval; z_hi < z_lo gives the negated integrals
-    !! @param[out] i0          int rho^2 dz
-    !! @param[out] i1          int z rho^2 dz
-    !! @param[out] i2          int z^2 rho^2 dz
-    !! @param[out] i4          int rho^4 dz
-    pure subroutine segment_integrals_s(a_sq, k, l, z_lo, z_hi, i0, i1, i2, i4)
+    !! @param[in]  c0, c1, k, z_ref  The surface
+    !! @param[in]  z_lo, z_hi        The interval; z_hi < z_lo gives the negated integrals
+    !! @param[out] i0                int rho^2 dz
+    !! @param[out] i1                int z rho^2 dz
+    !! @param[out] i2                int z^2 rho^2 dz
+    !! @param[out] i4                int rho^4 dz
+    pure subroutine segment_integrals_s(c0, c1, k, z_ref, z_lo, z_hi, i0, i1, i2, i4)
 
-        real(kind = rk), intent(in) :: a_sq, k, l, z_lo, z_hi
+        real(kind = rk), intent(in) :: c0, c1, k, z_ref, z_lo, z_hi
         real(kind = rk), intent(out) :: i0, i1, i2, i4
 
-        real(kind = rk) :: d, ta, tb, s2, s4, j0, j1, j2
+        real(kind = rk) :: d, ta, tb, e1, e2, e3, e4, j0, j1, j2
 
         d = z_hi - z_lo
-        ta = z_lo - l
-        tb = z_hi - l
-        s2 = tb * tb + tb * ta + ta * ta
-        s4 = tb**4 + tb**3 * ta + tb * tb * ta * ta + tb * ta**3 + ta**4
+        ta = z_lo - z_ref
+        tb = z_hi - z_ref
+        e1 = 0.5_rk * (tb + ta)
+        e2 = (tb * tb + tb * ta + ta * ta) / 3.0_rk
+        e3 = 0.25_rk * (tb + ta) * (tb * tb + ta * ta)
+        e4 = (tb**4 + tb**3 * ta + tb * tb * ta * ta + tb * ta**3 + ta**4) / 5.0_rk
 
-        j0 = d * (a_sq - k * s2 / 3.0_rk)
-        j1 = d * (0.5_rk * a_sq * (tb + ta) - 0.25_rk * k * (tb + ta) * (tb * tb + ta * ta))
-        j2 = d * (a_sq * s2 / 3.0_rk - k * s4 / 5.0_rk)
+        j0 = d * (c0 + c1 * e1 - k * e2)
+        j1 = d * (c0 * e1 + c1 * e2 - k * e3)
+        j2 = d * (c0 * e2 + c1 * e3 - k * e4)
 
         i0 = j0
-        i1 = j1 + l * j0
-        i2 = j2 + 2.0_rk * l * j1 + l * l * j0
-        i4 = d * (a_sq * a_sq - 2.0_rk * a_sq * k * s2 / 3.0_rk + k * k * s4 / 5.0_rk)
+        i1 = j1 + z_ref * j0
+        i2 = j2 + 2.0_rk * z_ref * j1 + z_ref * z_ref * j0
+        i4 = d * (c0 * c0 + 2.0_rk * c0 * c1 * e1 + (c1 * c1 - 2.0_rk * c0 * k) * e2 &
+                - 2.0_rk * c1 * k * e3 + k * k * e4)
 
     end subroutine segment_integrals_s
 
@@ -165,22 +182,22 @@ contains
 
         real(kind = rk) :: p0, p1, p2, p4
 
-        call segment_integrals_s(geom%a_sq(1), geom%k(1), geom%l(1), geom%z_south, &
+        call segment_integrals_s(geom%a_sq(1), 0.0_rk, geom%k(1), geom%l(1), geom%z_south, &
                 geom%z_join(1), i0, i1, i2, i4)
 
         if (geom%is_separated) then
-            call segment_integrals_s(geom%a_sq(3), geom%k(3), geom%l(3), geom%z_join(1), &
-                    geom%l(3) - geom%w, p0, p1, p2, p4)
+            call segment_integrals_s(geom%mid_c0, geom%mid_c1, geom%k(3), geom%mid_ref, &
+                    geom%z_join(1), geom%l(3) - geom%w, p0, p1, p2, p4)
             call accumulate_s(p0, p1, p2, p4, i0, i1, i2, i4)
-            call segment_integrals_s(geom%a_sq(3), geom%k(3), geom%l(3), &
+            call segment_integrals_s(geom%mid_c0, geom%mid_c1, geom%k(3), geom%mid_ref, &
                     geom%l(3) + geom%w, geom%z_join(2), p0, p1, p2, p4)
         else
-            call segment_integrals_s(geom%a_sq(3), geom%k(3), geom%l(3), geom%z_join(1), &
-                    geom%z_join(2), p0, p1, p2, p4)
+            call segment_integrals_s(geom%mid_c0, geom%mid_c1, geom%k(3), geom%mid_ref, &
+                    geom%z_join(1), geom%z_join(2), p0, p1, p2, p4)
         end if
         call accumulate_s(p0, p1, p2, p4, i0, i1, i2, i4)
 
-        call segment_integrals_s(geom%a_sq(2), geom%k(2), geom%l(2), geom%z_join(2), &
+        call segment_integrals_s(geom%a_sq(2), 0.0_rk, geom%k(2), geom%l(2), geom%z_join(2), &
                 geom%z_north, p0, p1, p2, p4)
         call accumulate_s(p0, p1, p2, p4, i0, i1, i2, i4)
 
@@ -260,28 +277,48 @@ contains
     ! PROFILE
     !===========================================================================
 
-    !> One surface: rho = sqrt(a_sq - k (z - l)^2), drho/dz = -k (z - l)/rho.
+    !> One surface rho^2 = c0 + c1 t - k t^2, t = z - z_ref: rho and
+    !! drho/dz = (c1 - 2 k t)/(2 rho).
     !!
     !! (0, 0) where rho^2 <= 0: outside the surface's extent, inside a void,
     !! and at a pole or pinch point, where drho/dz diverges (the fos-param
     !! convention).
-    pure subroutine segment_rho_s(a_sq, k, l, z, rho, drho_dz)
+    pure subroutine segment_rho_s(c0, c1, k, z_ref, z, rho, drho_dz)
 
-        real(kind = rk), intent(in) :: a_sq, k, l, z
+        real(kind = rk), intent(in) :: c0, c1, k, z_ref, z
         real(kind = rk), intent(out) :: rho, drho_dz
 
-        real(kind = rk) :: rho_sq
+        real(kind = rk) :: t, rho_sq
 
-        rho_sq = a_sq - k * (z - l)**2
+        t = z - z_ref
+        rho_sq = c0 + c1 * t - k * t * t
         if (rho_sq > 0.0_rk) then
             rho = sqrt(rho_sq)
-            drho_dz = -k * (z - l) / rho
+            drho_dz = 0.5_rk * (c1 - 2.0_rk * k * t) / rho
         else
             rho = 0.0_rk
             drho_dz = 0.0_rk
         end if
 
     end subroutine segment_rho_s
+
+    !> The evaluation form (c0, c1, k, z_ref) of segment seg: an end spheroid
+    !! about its centre, the middle about mid_ref.
+    pure subroutine segment_form_s(geom, seg, c0, c1, k, z_ref)
+        type(geometry_t), intent(in) :: geom
+        integer(kind = ik), intent(in) :: seg
+        real(kind = rk), intent(out) :: c0, c1, k, z_ref
+        k = geom%k(seg)
+        if (seg == 3_ik) then
+            c0 = geom%mid_c0
+            c1 = geom%mid_c1
+            z_ref = geom%mid_ref
+        else
+            c0 = geom%a_sq(seg)
+            c1 = 0.0_rk
+            z_ref = geom%l(seg)
+        end if
+    end subroutine segment_form_s
 
     !> rho and drho/dz of the body at z: end 1 for z <= z_join(1), end 2 for
     !! z >= z_join(2), the middle between.
@@ -292,6 +329,7 @@ contains
         real(kind = rk), intent(out) :: rho, drho_dz
 
         integer(kind = ik) :: seg
+        real(kind = rk) :: c0, c1, k, z_ref
 
         if (z <= geom%z_join(1)) then
             seg = 1_ik
@@ -300,7 +338,8 @@ contains
         else
             seg = 3_ik
         end if
-        call segment_rho_s(geom%a_sq(seg), geom%k(seg), geom%l(seg), z, rho, drho_dz)
+        call segment_form_s(geom, seg, c0, c1, k, z_ref)
+        call segment_rho_s(c0, c1, k, z_ref, z, rho, drho_dz)
 
     end subroutine rho_at_z_s
 
@@ -388,17 +427,21 @@ contains
 
     !> R(theta) from the origin by closed-form ray intersection.
     !!
-    !! The ray z = r cos, rho = r sin on segment i satisfies
-    !!   F(r, theta) = r^2 (sin^2 + k cos^2) - 2 k l cos r + (k l^2 - a_sq) = 0,
+    !! The ray z = r cos, rho = r sin on a segment rho^2 = c0 + c1 t - k t^2,
+    !! t = z - z_ref, satisfies, with b = c1 + 2 k z_ref,
+    !!   F(r, theta) = r^2 (sin^2 + k cos^2) - b cos r - (c0 - c1 z_ref - k z_ref^2) = 0,
     !! solved in the stable form; the leading coefficient vanishes where the
     !! ray is parallel to a hyperboloid's asymptotic cone and the equation is
     !! then linear (solve_quadratic_s handles both). A root counts when r > 0
     !! and z = r cos lies on the segment's side of its joins (an end spheroid's
     !! outer bound, its pole, holds automatically on the surface). The first
     !! survivor in the order end 1, middle, end 2 is R; for a star-convex shape
-    !! it is the only one. dR/dtheta = -F_theta/F_r with
-    !!   F_r = 2 r (sin^2 + k cos^2) - 2 k l cos,
-    !!   F_theta = 2 r sin [r cos (1 - k) + k l].
+    !! it is the only one. If none survives, the hit nearest its segment is R
+    !! when it misses by at most RAY_GAP_SLACK (a coincident join's sliver). dR/dtheta = -F_theta/F_r with
+    !!   F_r = 2 r (sin^2 + k cos^2) - b cos,
+    !!   F_theta = r sin [2 r cos (1 - k) + b].
+    !! For an end spheroid (c1 = 0, z_ref = l, c0 = a^2) these are the familiar
+    !! r^2 (sin^2 + k cos^2) - 2 k l cos r + (k l^2 - a^2) = 0 and its derivatives.
     !!
     !! @param[in]  geom                   Resolved, connected geometry
     !! @param[in]  cos_theta, sin_theta   The ray direction
@@ -412,18 +455,21 @@ contains
         logical, intent(out) :: found
 
         integer(kind = ik), parameter :: ORDER(3) = [1_ik, 3_ik, 2_ik]
-        real(kind = rk) :: a_sq, k, l, lead, roots(2), z_lo, z_hi, z, f_r, f_theta
+        real(kind = rk) :: c0, c1, k, z_ref, b, lead, roots(2), z_lo, z_hi, z, f_r, f_theta
+        real(kind = rk) :: miss, best_miss, best_r, best_dr
         integer(kind = ik) :: j, seg, n_roots, m
 
         r = 0.0_rk
         dr_dtheta = 0.0_rk
         found = .false.
+        best_miss = huge(1.0_rk)
+        best_r = 0.0_rk
+        best_dr = 0.0_rk
 
         do j = 1_ik, 3_ik
             seg = ORDER(j)
-            a_sq = geom%a_sq(seg)
-            k = geom%k(seg)
-            l = geom%l(seg)
+            call segment_form_s(geom, seg, c0, c1, k, z_ref)
+            b = c1 + 2.0_rk * k * z_ref
             select case (seg)
             case (1_ik)
                 z_lo = -huge(1.0_rk)
@@ -437,30 +483,46 @@ contains
             end select
 
             lead = sin_theta * sin_theta + k * cos_theta * cos_theta
-            call solve_quadratic_s(lead, -2.0_rk * k * l * cos_theta, k * l * l - a_sq, &
+            call solve_quadratic_s(lead, -b * cos_theta, -(c0 - c1 * z_ref - k * z_ref * z_ref), &
                     n_roots, roots(1), roots(2))
             do m = 1_ik, min(n_roots, 2_ik)
                 if (.not. (roots(m) > 0.0_rk)) cycle
                 z = roots(m) * cos_theta
-                if (z < z_lo .or. z > z_hi) cycle
+                miss = max(z_lo - z, z - z_hi)
+                if (miss > 0.0_rk .and. .not. (miss < best_miss)) cycle
+                f_r = 2.0_rk * roots(m) * lead - b * cos_theta
+                f_theta = roots(m) * sin_theta * (2.0_rk * roots(m) * cos_theta * (1.0_rk - k) + b)
+                if (miss > 0.0_rk) then
+                    best_miss = miss
+                    best_r = roots(m)
+                    best_dr = 0.0_rk
+                    if (abs(f_r) > 0.0_rk) best_dr = -f_theta / f_r
+                    cycle
+                end if
                 r = roots(m)
-                f_r = 2.0_rk * r * lead - 2.0_rk * k * l * cos_theta
-                f_theta = 2.0_rk * r * sin_theta * (r * cos_theta * (1.0_rk - k) + k * l)
                 if (abs(f_r) > 0.0_rk) dr_dtheta = -f_theta / f_r
                 found = .true.
                 return
             end do
         end do
 
+        if (best_miss <= RAY_GAP_SLACK) then
+            r = best_r
+            dr_dtheta = best_dr
+            found = .true.
+        end if
+
     end subroutine ray_radius_s
 
     !> Star-convexity margin from the origin: min over the shape of
     !! f(z) = rho - z drho/dz, closed form.
     !!
-    !! On a segment rho rho' = -k (z - l), so
-    !!   f = (rho^2 + k z (z - l))/rho = (a_sq + k l (z - l))/rho, and
-    !!   f' = [k l rho^2 + (a_sq + k l (z - l)) k (z - l)]/rho^3 = k a_sq z/rho^3:
-    !! the only interior critical point of any segment is z = 0, where
+    !! On a segment rho^2 = A + B z - k z^2 (any quadric of revolution about
+    !! the axis), rho rho' = (B - 2 k z)/2, so
+    !!   f = (rho^2 - z rho rho')/rho = (A + B z/2)/rho, and
+    !!   f' = [(B/2) rho^2 - (A + B z/2)(B - 2 k z)/2]/rho^3 = z (B^2/4 + A k)/rho^3
+    !! (with B = 2 k l, A = a^2 - k l^2 this is k a^2 z/rho^3): the only
+    !! interior critical point of any segment is z = 0, where
     !! f = rho(0). At the poles of a connected shape containing the origin f
     !! tends to +infinity. The minimum is therefore among f at the two joins
     !! (one segment each suffices, the joins are C1) and rho(0); f(0) is an
@@ -476,9 +538,9 @@ contains
 
         real(kind = rk) :: rho, drho_dz
 
-        call segment_rho_s(geom%a_sq(1), geom%k(1), geom%l(1), geom%z_join(1), rho, drho_dz)
+        call segment_rho_s(geom%a_sq(1), 0.0_rk, geom%k(1), geom%l(1), geom%z_join(1), rho, drho_dz)
         margin = rho - geom%z_join(1) * drho_dz
-        call segment_rho_s(geom%a_sq(2), geom%k(2), geom%l(2), geom%z_join(2), rho, drho_dz)
+        call segment_rho_s(geom%a_sq(2), 0.0_rk, geom%k(2), geom%l(2), geom%z_join(2), rho, drho_dz)
         margin = min(margin, rho - geom%z_join(2) * drho_dz)
         call rho_at_z_s(geom, 0.0_rk, rho, drho_dz)
         margin = min(margin, rho)

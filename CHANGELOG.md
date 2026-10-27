@@ -39,9 +39,13 @@ Calls made in this release (owner-visible):
   shared join to within 1e-6 max(1, a_i^2) in rho^2. Both ends degenerate only
   on the exact spheroid line sigma1 = alpha2 = 0. A discriminant negative by
   under 1e-12 of its scale is a double root.
-- A waist farther than 1e3 u from the end-centre midpoint is code 101: near
-  sigma2 = 0 with alpha2 /= 0 the closed form cancels catastrophically, so the
-  101 point the cylinder rule already gives widens to |sigma2| below ~1e-4.
+- Near sigma2 = 0 with alpha2 /= 0 the waist runs off like alpha2/sigma2. A
+  middle whose waist is farther than 1e3 u from the end-centre midpoint is
+  evaluated from its south join (every coefficient O(1)) instead of about the
+  waist, and the l3 quadratic's coefficients are formed without cancellation,
+  so these shapes keep full accuracy; only sigma2 = 0 exactly is 101.
+- A ray through the sliver a coincident (degenerate-curvature) join leaves
+  takes the nearest surface hit instead of reporting 102.
 - `waist_inside` is set only for a sigma2 < 0 middle.
 - Where the end spheroids are tangent the joins coincide; z1 above z2 by at
   most 1e-10 (roundoff) is one join, not a rejection.

@@ -100,7 +100,7 @@ contains
             do j = 1_ik, N_GL
                 z = mid + half * x(j)
                 wz = half * wt(j)
-                call segment_rho_s(geom%a_sq(seg), geom%k(seg), geom%l(seg), z, rho, drho)
+                call segment_rho_s(geom%a_sq(seg), 0.0_rk, geom%k(seg), geom%l(seg), z, rho, drho)
                 rho_sq = rho * rho
                 m0 = m0 + wz * rho_sq
                 m1 = m1 + wz * z * rho_sq

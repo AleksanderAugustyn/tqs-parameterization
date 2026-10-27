@@ -80,12 +80,12 @@ contains
         type(geometry_t) :: g
         real(kind = rk) :: r_a, d_a, r_b, d_b
         call resolve_ok(params, g, label)
-        call segment_rho_s(g%a_sq(1), g%k(1), g%l(1), g%z_join(1), r_a, d_a)
-        call segment_rho_s(g%a_sq(3), g%k(3), g%l(3), g%z_join(1), r_b, d_b)
+        call segment_rho_s(g%a_sq(1), 0.0_rk, g%k(1), g%l(1), g%z_join(1), r_a, d_a)
+        call segment_rho_s(g%a_sq(3), 0.0_rk, g%k(3), g%l(3), g%z_join(1), r_b, d_b)
         call assert_abs_close(r_a, r_b, 1.0e-13_rk, label // ': rho continuous at z1')
         call assert_abs_close(d_a, d_b, 1.0e-13_rk, label // ': drho/dz continuous at z1')
-        call segment_rho_s(g%a_sq(3), g%k(3), g%l(3), g%z_join(2), r_a, d_a)
-        call segment_rho_s(g%a_sq(2), g%k(2), g%l(2), g%z_join(2), r_b, d_b)
+        call segment_rho_s(g%a_sq(3), 0.0_rk, g%k(3), g%l(3), g%z_join(2), r_a, d_a)
+        call segment_rho_s(g%a_sq(2), 0.0_rk, g%k(2), g%l(2), g%z_join(2), r_b, d_b)
         call assert_abs_close(r_a, r_b, 1.0e-13_rk, label // ': rho continuous at z2')
         call assert_abs_close(d_a, d_b, 1.0e-13_rk, label // ': drho/dz continuous at z2')
     end subroutine join_check

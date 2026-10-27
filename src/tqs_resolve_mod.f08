@@ -17,13 +17,21 @@ module tqs_resolve_mod
     use precision_utilities_mod, only: ik, rk
     use shape_core_mod, only: SHAPE_VALID
     use tqs_workers_mod, only: geometry_t, solve_quadratic_s, body_integrals_s, TQS_PINCH_TOL, &
-            TQS_DEGENERATE_TOL, TQS_COINCIDENCE_TOL, TQS_MAX_WAIST_OFFSET, TQS_MID_SPHEROID, &
+            TQS_DEGENERATE_TOL, TQS_COINCIDENCE_TOL, TQS_MID_SPHEROID, &
             TQS_MID_CYLINDER, TQS_MID_ONE_SHEET, TQS_MID_CONE, TQS_MID_TWO_SHEET, &
             TQS_ERROR_INVALID_COORDINATES, TQS_ERROR_NO_GEOMETRY
 
     implicit none
 
     private
+
+    !> A waist farther than this (u units) from the end-centre midpoint is
+    !! evaluated from the south join instead of about itself. Near sigma2 = 0
+    !! with alpha2 /= 0 the waist runs off like alpha2/sigma2 and a3^2 like
+    !! 1/sigma2; about the waist the middle is a difference of huge terms and
+    !! the centre of mass loses ~eps * offset^2 (~1e-11 R0 at 1e3), about the
+    !! join every coefficient is O(1).
+    real(kind = rk), parameter :: MIDDLE_ANCHOR_OFFSET = 1.0e3_rk
 
     !> z1 above z2 by at most this (times max(1, |z1|, |z2|), u units) is a
     !! zero-length middle, not a crossing: where the two end spheroids are
@@ -159,12 +167,18 @@ contains
             end if
 
         else
-            ! Generic path: equate the two joins' a3^2, a quadratic in l3.
+            ! Generic path: equate the two joins' a3^2, a quadratic in l3,
+            !   (g1 - g2) l3^2 - 2 (g1 l1 - g2 l2) l3 + (g1 l1^2 - g2 l2^2 + a1^2 - a2^2) = 0.
+            ! With l1 = -sigma1/2, l2 = sigma1/2 and k1 - k2 = alpha3 the
+            ! coefficients are written without cancellation: g1 - g2 is
+            ! O(sigma2^2) while g1 and g2 are O(sigma2), and as sigma2 -> 0 the
+            ! difference would leave l3 (and sigma2 l3, so the joins) with a
+            ! relative error ~eps/sigma2.
             g(1) = join_g_f(geom%k(1), s2)
             g(2) = join_g_f(geom%k(2), s2)
-            coef_a = g(1) - g(2)
-            coef_b = -2.0_rk * (g(1) * geom%l(1) - g(2) * geom%l(2))
-            coef_c = g(1) * geom%l(1)**2 - g(2) * geom%l(2)**2 + geom%a_sq(1) - geom%a_sq(2)
+            coef_a = -s2 * s2 * a3 / ((geom%k(1) - s2) * (geom%k(2) - s2))
+            coef_b = s1 * (g(1) + g(2))
+            coef_c = 0.25_rk * s1 * s1 * coef_a + a2
             call solve_quadratic_s(coef_a, coef_b, coef_c, n_roots, r(1), r(2))
 
             select case (n_roots)
@@ -191,7 +205,7 @@ contains
                 l3 = cand(j)
                 z1 = join_z_f(geom%k(1), geom%l(1), s2, l3)
                 z2 = join_z_f(geom%k(2), geom%l(2), s2, l3)
-                ok = joins_valid_f(geom, z1, z2) .and. abs(l3 - l_mid) <= TQS_MAX_WAIST_OFFSET
+                ok = joins_valid_f(geom, z1, z2)
                 if (.not. ok) cycle
                 n_valid = n_valid + 1_ik
                 ! Both pass: the root nearer the end-centre midpoint.
@@ -228,13 +242,24 @@ contains
 
         call classify_s(geom)
 
+        ! The middle's evaluation form, after classify_s (a cone's a3^2 is 0).
+        if (abs(geom%l(3) - l_mid) <= MIDDLE_ANCHOR_OFFSET) then
+            geom%mid_ref = geom%l(3)
+            geom%mid_c0 = geom%a_sq(3)
+            geom%mid_c1 = 0.0_rk
+        else
+            geom%mid_ref = geom%z_join(1)
+            geom%mid_c0 = geom%a_sq(1) - geom%k(1) * (geom%z_join(1) - geom%l(1))**2
+            geom%mid_c1 = -2.0_rk * geom%k(1) * (geom%z_join(1) - geom%l(1))
+        end if
+
     end subroutine resolve_unit_s
 
     !> Coordinates -> geometry in R0 = 1 units with the centre of mass at the origin.
     !!
     !! resolve_unit_s, then the volume scale u = (4 pi/3 / V1)^(1/3) from the
-    !! unit-stage volume V1 = pi i0: lengths (c, l, z_join, z_south, z_north, w)
-    !! times u, a_sq times u^2, k unchanged. The centre of mass z_cm = i1/i0,
+    !! unit-stage volume V1 = pi i0: lengths (c, l, z_join, z_south, z_north, w,
+    !! mid_ref, mid_c1) times u, a_sq and mid_c0 times u^2, k unchanged. The centre of mass z_cm = i1/i0,
     !! computed at u = 1 and scaled by u, is then subtracted from l, z_join,
     !! z_south and z_north. geom%u = u.
     !!
@@ -263,6 +288,9 @@ contains
         geom%a_sq = geom%a_sq * (u * u)
         geom%c = geom%c * u
         geom%w = geom%w * u
+        geom%mid_c0 = geom%mid_c0 * (u * u)
+        geom%mid_c1 = geom%mid_c1 * u
+        geom%mid_ref = geom%mid_ref * u - shift
         geom%l = geom%l * u - shift
         geom%z_join = geom%z_join * u - shift
         geom%z_south = geom%z_south * u - shift

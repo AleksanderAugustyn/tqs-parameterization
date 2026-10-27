@@ -24,6 +24,8 @@ program tqs_param_rtheta_test
     call test_t4_poles()
     call test_t5_star_gate()
     call test_t6_margin_cross_checks()
+    call test_t7_ray_in_a_coincident_join()
+    call test_t8_linear_middle_hit()
 
     call test_summary()
 
@@ -208,5 +210,57 @@ contains
         call resolve_ok(SPHERE, g, 'T6 SPHERE')
         call assert_abs_close(star_margin_f(g), 1.0_rk, 1.0e-4_rk, 'T6 SPHERE margin')
     end subroutine test_t6_margin_cross_checks
+
+    !> Inside the degenerate band the coincident join is C0 only to roundoff
+    !! (rho^2 mismatch O((k_i - sigma2)^2)); a ray through that sliver must still
+    !! find the surface, not report 102.
+    subroutine test_t7_ray_in_a_coincident_join()
+        type(geometry_t) :: g
+        real(kind = rk), parameter :: THETA = 2.67801371516_rk, H = 1.0e-6_rk
+        real(kind = rk) :: r, dr, rho, drho, rp, rm, dummy, left, right, tol
+        logical :: found, fp, fm
+        call resolve_ok([0.5_rk, 2.00005_rk, 1.5_rk, -0.5_rk, 1.0_rk], g, 'T7 coincident band')
+        call radius_at(g, THETA, r, dr, found)
+        call assert_true(found, 'T7 the ray through the coincident join hits')
+        call rho_at_z_s(g, r * cos(THETA), rho, drho)
+        call assert_abs_close(rho, r * sin(THETA), 1.0e-8_rk, 'T7 the hit lies on the profile')
+        ! The join is only C0 inside the degenerate band (drho/dz steps by
+        ! ~2 |k_i - sigma2| |z - l_i|), so R has a kink here: dR/dtheta is a
+        ! one-sided slope and must lie between the left and right differences.
+        call radius_at(g, THETA + H, rp, dummy, fp)
+        call radius_at(g, THETA - H, rm, dummy, fm)
+        left = (r - rm) / H
+        right = (rp - r) / H
+        tol = 1.0e-5_rk * (1.0_rk + abs(dr))
+        call assert_true(fp .and. fm .and. dr >= min(left, right) - tol .and. dr <= max(left, right) + tol, &
+                'T7 dR/dtheta lies between the one-sided slopes')
+    end subroutine test_t7_ray_in_a_coincident_join
+
+    !> A ray parallel to the middle's asymptotic cone that HITS the middle: the
+    !! leading coefficient sin^2 + k cos^2 vanishes and the middle's equation is
+    !! linear in r. FLARE has its waist outside the middle, so the hit at
+    !! tan^2 theta = -sigma2 lies inside (z1, z2).
+    subroutine test_t8_linear_middle_hit()
+        real(kind = rk), parameter :: FLARE(5) = [0.4_rk, -1.6_rk, 1.0_rk, 0.4_rk, 0.0_rk]
+        type(geometry_t) :: g
+        real(kind = rk) :: th0, th, r, dr, rho, drho
+        logical :: found
+        integer(kind = ik) :: j
+        character(len = 24) :: tag
+        call resolve_ok(FLARE, g, 'T8 FLARE')
+        th0 = atan(sqrt(1.6_rk))
+        call radius_at(g, th0, r, dr, found)
+        call assert_true(found .and. g%z_join(1) < r * cos(th0) .and. r * cos(th0) < g%z_join(2), &
+                'T8 the asymptotic ray hits the middle segment')
+        do j = -1_ik, 1_ik
+            write(tag, '(A,I0)') 'T8 offset ', j
+            th = th0 + real(j, rk) * 1.0e-3_rk
+            call radius_at(g, th, r, dr, found)
+            call assert_true(found, trim(tag) // ': found')
+            call rho_at_z_s(g, r * cos(th), rho, drho)
+            call assert_abs_close(rho, r * sin(th), 1.0e-12_rk, trim(tag) // ': the hit lies on the profile')
+            call assert_true(derivative_ok(g, th), trim(tag) // ': dR/dtheta matches central differences')
+        end do
+    end subroutine test_t8_linear_middle_hit
 
 end program tqs_param_rtheta_test

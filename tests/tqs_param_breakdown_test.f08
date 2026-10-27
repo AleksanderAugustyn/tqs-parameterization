@@ -306,17 +306,17 @@ contains
         call assert_int_eq(n_points, 110565_ik, 'K11 box size')
     end subroutine test_k11_both_pass_count
 
-    !> Volume and centre of mass of a resolved geometry with the middle body
-    !! written from its south join, rho3^2 = P + Q (z - z1) - sigma2 (z - z1)^2
+    !> Volume, centre of mass and the join-2 rho^2 mismatch of a resolved
+    !! geometry with the middle body written from its south join, rho3^2 = P + Q (z - z1) - sigma2 (z - z1)^2
     !! (P, Q from end 1 at z1), so every coefficient is O(1) however far the
     !! waist l3 is: an oracle independent of the library's (a3^2, l3) form.
     !! 64-node Gauss-Legendre per segment (degree <= 3 integrands: exact).
-    subroutine anchored_moments(g, vol, z_cm)
+    subroutine anchored_moments(g, vol, z_cm, join2)
         type(geometry_t), intent(in) :: g
-        real(kind = rk), intent(out) :: vol, z_cm
+        real(kind = rk), intent(out) :: vol, z_cm, join2
         integer(kind = ik), parameter :: N_GL = 64_ik
         integer(kind = ik), parameter :: SEGS(3) = [1_ik, 3_ik, 2_ik]
-        real(kind = rk) :: x(N_GL), wt(N_GL), m0, m1, p0, q0, lo(3), hi(3), half, mid, z, rho_sq
+        real(kind = rk) :: x(N_GL), wt(N_GL), m0, m1, p0, q0, lo(3), hi(3), half, mid, z, rho_sq, t
         integer(kind = ik) :: s, j
         call compute_gauss_legendre_quadrature_s(N_GL, x, wt)
         p0 = g%a_sq(1) - g%k(1) * (g%z_join(1) - g%l(1))**2
@@ -345,43 +345,50 @@ contains
         end do
         vol = PI_C * m0
         z_cm = m1 / m0
+        t = g%z_join(2) - g%z_join(1)
+        join2 = abs(p0 + q0 * t - g%k(3) * t * t - (g%a_sq(2) - g%k(2) * (g%z_join(2) - g%l(2))**2))
     end subroutine anchored_moments
 
-    !> sigma2 -> 0 with alpha2 /= 0: l3 and a3^2 diverge like 1/sigma2 and the
-    !! middle's coefficients cancel. Every point is either 101 or a geometry
-    !! whose volume and centre of mass hold against the anchored oracle.
+    !> sigma2 -> 0 with alpha2 /= 0: l3 and a3^2 diverge like 1/sigma2, but the
+    !! shape stays continuous and every point is a valid geometry (sigma2 = 0
+    !! itself is the cylinder rule's 101). The volume and centre of mass hold
+    !! against the anchored oracle, and the oracle's middle (built from join 1)
+    !! meets end 2 at join 2, which checks the library's joins independently.
     subroutine test_k12_sigma2_to_zero_asymmetric()
-        real(kind = rk), parameter :: BASES(5, 3) = reshape([0.6_rk, 0.0_rk, 1.0_rk, 0.2_rk, 0.3_rk, &
-                0.8_rk, 0.0_rk, 1.0_rk, 0.05_rk, 0.1_rk, 1.6_rk, 0.0_rk, 1.0_rk, 0.8_rk, 0.2_rk], [5, 3])
+        real(kind = rk), parameter :: BASES(5, 4) = reshape([0.6_rk, 0.0_rk, 1.0_rk, 0.2_rk, 0.3_rk, &
+                0.8_rk, 0.0_rk, 1.0_rk, 0.05_rk, 0.1_rk, 1.6_rk, 0.0_rk, 1.0_rk, 0.8_rk, 0.2_rk, &
+                1.0_rk, 0.0_rk, 1.0_rk, 0.2_rk, 0.0_rk], [5, 4])
         real(kind = rk), parameter :: S2(14) = [1.0e-4_rk, -1.0e-4_rk, 1.0e-5_rk, -1.0e-5_rk, &
                 1.0e-6_rk, -1.0e-6_rk, 1.0e-8_rk, -1.0e-8_rk, 1.0e-10_rk, -1.0e-10_rk, 1.0e-14_rk, &
                 -1.0e-14_rk, 2.2e-16_rk, -2.2e-16_rk]
         type(geometry_t) :: g
-        real(kind = rk) :: p(5), vol, z_cm
-        integer(kind = ik) :: b, j, status, n_bad, n_rejected
+        real(kind = rk) :: p(5), vol, z_cm, join2
+        integer(kind = ik) :: b, j, status, n_bad
         n_bad = 0_ik
-        n_rejected = 0_ik
-        do b = 1_ik, 3_ik
+        do b = 1_ik, 4_ik
             do j = 1_ik, size(S2, kind = ik)
                 p = BASES(:, b)
                 p(2) = S2(j)
                 call resolve_s(p, g, status)
-                if (status == TQS_ERROR_NO_GEOMETRY) then
-                    n_rejected = n_rejected + 1_ik
+                if (status /= 0_ik) then
+                    n_bad = n_bad + 1_ik
+                    write(*, '(A,5ES11.3,A,I0)') '   K12 rejected: ', p, ' status ', status
                     cycle
                 end if
-                call anchored_moments(g, vol, z_cm)
-                if (status /= 0_ik .or. abs(vol - 4.0_rk * PI_C / 3.0_rk) > 1.0e-11_rk &
-                        .or. abs(z_cm) > 1.0e-10_rk) then
+                call anchored_moments(g, vol, z_cm, join2)
+                if (abs(vol - 4.0_rk * PI_C / 3.0_rk) > 1.0e-11_rk .or. abs(z_cm) > 1.0e-11_rk &
+                        .or. join2 > 1.0e-12_rk) then
                     n_bad = n_bad + 1_ik
-                    write(*, '(A,5ES11.3,A,I0,2ES11.3)') '   K12 bad: ', p, ' status ', status, &
-                            vol - 4.0_rk * PI_C / 3.0_rk, z_cm
+                    write(*, '(A,5ES11.3,3ES11.3)') '   K12 bad: ', p, vol - 4.0_rk * PI_C / 3.0_rk, &
+                            z_cm, join2
                 end if
             end do
         end do
-        write(*, '(A,I0,A)') 'K12 sigma2 -> 0, alpha2 /= 0: ', n_rejected, ' of 42 points rejected (101)'
-        call assert_int_eq(n_bad, 0_ik, 'K12 every accepted point has the anchored volume and centre of mass')
-        call assert_true(n_rejected > 0_ik .and. n_rejected < 42_ik, 'K12 a narrow band is rejected, not all')
+        call assert_int_eq(n_bad, 0_ik, 'K12 sigma2 -> 0, alpha2 /= 0: every point valid, volume, '&
+                // 'centre of mass and join 2 hold')
+        p = pv(0.6_rk, 0.0_rk, 1.0_rk, 0.2_rk, 0.3_rk)
+        call resolve_s(p, g, status)
+        call assert_int_eq(status, TQS_ERROR_NO_GEOMETRY, 'K12 sigma2 = 0 exactly with alpha2 /= 0 -> 101')
     end subroutine test_k12_sigma2_to_zero_asymmetric
 
     !> The coincidence of a degenerate end is judged by the rho^2 mismatch at

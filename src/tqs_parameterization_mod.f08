@@ -75,7 +75,7 @@ module tqs_parameterization_mod
             moller_coordinates_s, ray_radius_s, star_margin_f, theta_trig_s, &
             TQS_N_PARAMS, TQS_N_POINTS_FLOOR, &
             STAR_CONVEXITY_MARGIN, TQS_PINCH_TOL, TQS_DEGENERATE_TOL, &
-            TQS_COINCIDENCE_TOL, TQS_MAX_WAIST_OFFSET, TQS_MID_NONE, TQS_MID_SPHEROID, &
+            TQS_COINCIDENCE_TOL, TQS_MID_NONE, TQS_MID_SPHEROID, &
             TQS_MID_CYLINDER, TQS_MID_ONE_SHEET, TQS_MID_CONE, TQS_MID_TWO_SHEET, &
             TQS_ERROR_INVALID_COORDINATES, TQS_ERROR_NO_GEOMETRY, &
             TQS_ERROR_NOT_STAR_CONVEX, TQS_ERROR_SEPARATED
@@ -131,7 +131,6 @@ module tqs_parameterization_mod
     public :: TQS_PINCH_TOL
     public :: TQS_DEGENERATE_TOL
     public :: TQS_COINCIDENCE_TOL
-    public :: TQS_MAX_WAIST_OFFSET
     public :: TQS_MID_NONE
     public :: TQS_MID_SPHEROID
     public :: TQS_MID_CYLINDER

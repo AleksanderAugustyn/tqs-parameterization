@@ -20,14 +20,16 @@ program tqs_param_workers_test
     call test_w2_large_offset()
     call test_w3_body_sum()
     call test_w4_quadratic()
+    call test_w5_linear_term()
 
     call test_summary()
 
 contains
 
-    !> The four integrands of segment_integrals_s by 64-node GL on [z_lo, z_hi].
-    subroutine gl_segment(a_sq, k, l, z_lo, z_hi, i0, i1, i2, i4)
-        real(kind = rk), intent(in) :: a_sq, k, l, z_lo, z_hi
+    !> The four integrands of segment_integrals_s by 64-node GL on [z_lo, z_hi],
+    !! for rho^2 = c0 + c1 (z - z_ref) - k (z - z_ref)^2.
+    subroutine gl_segment(c0, c1, k, z_ref, z_lo, z_hi, i0, i1, i2, i4)
+        real(kind = rk), intent(in) :: c0, c1, k, z_ref, z_lo, z_hi
         real(kind = rk), intent(out) :: i0, i1, i2, i4
         real(kind = rk) :: half, mid, z, rho_sq, wz
         integer(kind = ik) :: j
@@ -40,7 +42,7 @@ contains
         do j = 1_ik, N_GL
             z = mid + half * gl_x(j)
             wz = half * gl_w(j)
-            rho_sq = a_sq - k * (z - l)**2
+            rho_sq = c0 + c1 * (z - z_ref) - k * (z - z_ref)**2
             i0 = i0 + wz * rho_sq
             i1 = i1 + wz * z * rho_sq
             i2 = i2 + wz * z * z * rho_sq
@@ -58,9 +60,9 @@ contains
         character(len = 16) :: tag
         do s = 1_ik, 3_ik
             write(tag, '(A,I0)') 'W1 seg ', s
-            call segment_integrals_s(SEG(1, s), SEG(2, s), SEG(3, s), SEG(4, s), &
+            call segment_integrals_s(SEG(1, s), 0.0_rk, SEG(2, s), SEG(3, s), SEG(4, s), &
                     SEG(5, s), i0, i1, i2, i4)
-            call gl_segment(SEG(1, s), SEG(2, s), SEG(3, s), SEG(4, s), SEG(5, s), &
+            call gl_segment(SEG(1, s), 0.0_rk, SEG(2, s), SEG(3, s), SEG(4, s), SEG(5, s), &
                     g0, g1, g2, g4)
             call assert_abs_close(i0, g0, 1.0e-13_rk, trim(tag) // ' i0')
             call assert_abs_close(i1, g1, 1.0e-13_rk, trim(tag) // ' i1')
@@ -72,7 +74,7 @@ contains
     subroutine test_w2_large_offset()
         real(kind = rk), parameter :: L_BIG = 5.0e7_rk
         real(kind = rk) :: i0, i1, i2, i4
-        call segment_integrals_s(1.0_rk, 1.0_rk, L_BIG, L_BIG - 1.0_rk, L_BIG + 1.0_rk, &
+        call segment_integrals_s(1.0_rk, 0.0_rk, 1.0_rk, L_BIG, L_BIG - 1.0_rk, L_BIG + 1.0_rk, &
                 i0, i1, i2, i4)
         call assert_close(i0, 4.0_rk / 3.0_rk, 1.0e-12_rk, 'W2 i0 = 4/3')
         call assert_close(i1, L_BIG * 4.0_rk / 3.0_rk, 1.0e-12_rk, 'W2 i1 = l i0')
@@ -92,14 +94,16 @@ contains
         geom%z_join = [-0.39_rk, 0.39_rk]
         geom%z_south = -1.8_rk
         geom%z_north = 1.8_rk
+        geom%mid_ref = geom%l(3)
+        geom%mid_c0 = geom%a_sq(3)
 
         call body_integrals_s(geom, b0, b1, b2, b4)
-        call segment_integrals_s(geom%a_sq(1), geom%k(1), geom%l(1), geom%z_south, &
+        call segment_integrals_s(geom%a_sq(1), 0.0_rk, geom%k(1), geom%l(1), geom%z_south, &
                 geom%z_join(1), s0, s1, s2, s4)
-        call segment_integrals_s(geom%a_sq(3), geom%k(3), geom%l(3), geom%z_join(1), &
+        call segment_integrals_s(geom%a_sq(3), 0.0_rk, geom%k(3), geom%l(3), geom%z_join(1), &
                 geom%z_join(2), p0, p1, p2, p4)
         s0 = s0 + p0; s1 = s1 + p1; s2 = s2 + p2; s4 = s4 + p4
-        call segment_integrals_s(geom%a_sq(2), geom%k(2), geom%l(2), geom%z_join(2), &
+        call segment_integrals_s(geom%a_sq(2), 0.0_rk, geom%k(2), geom%l(2), geom%z_join(2), &
                 geom%z_north, p0, p1, p2, p4)
         s0 = s0 + p0; s1 = s1 + p1; s2 = s2 + p2; s4 = s4 + p4
         call assert_abs_close(b0, s0, 1.0e-15_rk, 'W3 connected i0 = segment sum')
@@ -111,15 +115,15 @@ contains
         geom%is_separated = .true.
         geom%w = W
         call body_integrals_s(geom, b0, b1, b2, b4)
-        call segment_integrals_s(geom%a_sq(1), geom%k(1), geom%l(1), geom%z_south, &
+        call segment_integrals_s(geom%a_sq(1), 0.0_rk, geom%k(1), geom%l(1), geom%z_south, &
                 geom%z_join(1), s0, s1, s2, s4)
-        call segment_integrals_s(geom%a_sq(3), geom%k(3), geom%l(3), geom%z_join(1), &
+        call segment_integrals_s(geom%a_sq(3), 0.0_rk, geom%k(3), geom%l(3), geom%z_join(1), &
                 geom%l(3) - W, p0, p1, p2, p4)
         s0 = s0 + p0; s1 = s1 + p1; s2 = s2 + p2; s4 = s4 + p4
-        call segment_integrals_s(geom%a_sq(3), geom%k(3), geom%l(3), geom%l(3) + W, &
+        call segment_integrals_s(geom%a_sq(3), 0.0_rk, geom%k(3), geom%l(3), geom%l(3) + W, &
                 geom%z_join(2), p0, p1, p2, p4)
         s0 = s0 + p0; s1 = s1 + p1; s2 = s2 + p2; s4 = s4 + p4
-        call segment_integrals_s(geom%a_sq(2), geom%k(2), geom%l(2), geom%z_join(2), &
+        call segment_integrals_s(geom%a_sq(2), 0.0_rk, geom%k(2), geom%l(2), geom%z_join(2), &
                 geom%z_north, p0, p1, p2, p4)
         s0 = s0 + p0; s1 = s1 + p1; s2 = s2 + p2; s4 = s4 + p4
         call assert_abs_close(b0, s0, 1.0e-15_rk, 'W3 separated i0 = segment sum')
@@ -165,5 +169,27 @@ contains
         call assert_true(abs(1.0e-8_rk * r2**2 + r2 + 1.0_rk) <= 1.0e-12_rk * (1.0_rk + abs(r2)), &
                 'W4 (1e-8,1,1) root 2 residual')
     end subroutine test_w4_quadratic
+
+    !> The general segment rho^2 = c0 + c1 (z - z_ref) - k (z - z_ref)^2 (a
+    !! middle body anchored at a join) against GL, and its body sum.
+    subroutine test_w5_linear_term()
+        real(kind = rk), parameter :: SEG(6, 2) = reshape([ &
+                0.8_rk, 0.3_rk, -0.6_rk, 0.2_rk, -0.4_rk, 0.6_rk, &
+                1.1_rk, -0.5_rk, 1.5_rk, -0.3_rk, -0.9_rk, 0.1_rk], [6, 2])
+        real(kind = rk) :: i0, i1, i2, i4, g0, g1, g2, g4
+        integer(kind = ik) :: s
+        character(len = 16) :: tag
+        do s = 1_ik, 2_ik
+            write(tag, '(A,I0)') 'W5 seg ', s
+            call segment_integrals_s(SEG(1, s), SEG(2, s), SEG(3, s), SEG(4, s), SEG(5, s), &
+                    SEG(6, s), i0, i1, i2, i4)
+            call gl_segment(SEG(1, s), SEG(2, s), SEG(3, s), SEG(4, s), SEG(5, s), SEG(6, s), &
+                    g0, g1, g2, g4)
+            call assert_abs_close(i0, g0, 1.0e-13_rk, trim(tag) // ' i0')
+            call assert_abs_close(i1, g1, 1.0e-13_rk, trim(tag) // ' i1')
+            call assert_abs_close(i2, g2, 1.0e-13_rk, trim(tag) // ' i2')
+            call assert_abs_close(i4, g4, 1.0e-13_rk, trim(tag) // ' i4')
+        end do
+    end subroutine test_w5_linear_term
 
 end program tqs_param_workers_test

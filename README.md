@@ -67,10 +67,10 @@ Two rules worth knowing:
   sphere and spheroids are isolated points on the line sigma2 = sigma3,
   alpha3 = 0: any sigma1 > 0 there is code 101.
 - **sigma2 near 0 with alpha2 /= 0.** A cylinder middle needs alpha2 = 0, so
-  sigma2 = 0 with alpha2 /= 0 is code 101. Beside it the waist runs off to
-  |l3| ~ alpha2/sigma2 and the closed form loses accuracy, so a waist farther
-  than 1e3 (in units of u) from the end-centre midpoint is code 101 as well:
-  a band of |sigma2| below about 1e-4 around the point that is already 101.
+  sigma2 = 0 with alpha2 /= 0 is code 101. Beside it the shape is continuous
+  but the waist runs off to |l3| ~ alpha2/sigma2; the library then evaluates
+  the middle from its south join rather than about its waist, so these shapes
+  keep full accuracy, and `geometry` reports the far waist as it is.
 - **The root rule is a guard.** The joins reduce to a quadratic in l3. If
   both roots gave a valid geometry the library would take the one nearer the
   end-centre midpoint; over the 110,565-point test box this never happens.
