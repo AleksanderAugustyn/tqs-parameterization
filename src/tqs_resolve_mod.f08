@@ -16,7 +16,7 @@ module tqs_resolve_mod
 
     use precision_utilities_mod, only: ik, rk
     use shape_core_mod, only: SHAPE_VALID
-    use tqs_workers_mod, only: geometry_t, solve_quadratic_s, TQS_PINCH_TOL, &
+    use tqs_workers_mod, only: geometry_t, solve_quadratic_s, body_integrals_s, TQS_PINCH_TOL, &
             TQS_DEGENERATE_TOL, TQS_COINCIDENCE_TOL, TQS_MID_SPHEROID, &
             TQS_MID_CYLINDER, TQS_MID_ONE_SHEET, TQS_MID_CONE, TQS_MID_TWO_SHEET, &
             TQS_ERROR_INVALID_COORDINATES, TQS_ERROR_NO_GEOMETRY
@@ -27,6 +27,9 @@ module tqs_resolve_mod
 
     public :: validate_coordinates_s
     public :: resolve_unit_s
+    public :: resolve_s
+    public :: alpha1_f
+    public :: scission_sigma1_s
 
 contains
 
@@ -210,6 +213,98 @@ contains
         call classify_s(geom)
 
     end subroutine resolve_unit_s
+
+    !> Coordinates -> geometry in R0 = 1 units with the centre of mass at the origin.
+    !!
+    !! resolve_unit_s, then the volume scale u = (4 pi/3 / V1)^(1/3) from the
+    !! unit-stage volume V1 = pi i0: lengths (c, l, z_join, z_south, z_north, w)
+    !! times u, a_sq times u^2, k unchanged. The centre of mass z_cm = i1/i0,
+    !! computed at u = 1 and scaled by u, is then subtracted from l, z_join,
+    !! z_south and z_north. geom%u = u.
+    !!
+    !! @param[in]  params         [sigma1, sigma2, sigma3, alpha2, alpha3]
+    !! @param[out] geom           The resolved geometry; zero-filled on failure
+    !! @param[out] status         SHAPE_VALID, 100 or 101
+    !! @param[out] n_valid_roots  As resolve_unit_s
+    pure subroutine resolve_s(params, geom, status, n_valid_roots)
+
+        real(kind = rk), intent(in) :: params(:)
+        type(geometry_t), intent(out) :: geom
+        integer(kind = ik), intent(out) :: status
+        integer(kind = ik), intent(out), optional :: n_valid_roots
+
+        real(kind = rk) :: i0, i1, i2, i4, u, shift
+
+        call resolve_unit_s(params, geom, status, n_valid_roots)
+        if (status /= SHAPE_VALID) return
+
+        call body_integrals_s(geom, i0, i1, i2, i4)
+        ! pi i0 = 4 pi/3 u^-3, so u^3 = 4/(3 i0).
+        u = (4.0_rk / (3.0_rk * i0))**(1.0_rk / 3.0_rk)
+        shift = u * (i1 / i0)
+
+        geom%u = u
+        geom%a_sq = geom%a_sq * (u * u)
+        geom%c = geom%c * u
+        geom%w = geom%w * u
+        geom%l = geom%l * u - shift
+        geom%z_join = geom%z_join * u - shift
+        geom%z_south = geom%z_south * u - shift
+        geom%z_north = geom%z_north * u - shift
+
+    end subroutine resolve_s
+
+    !> Nix's alpha1 = (l1 + l2)/(2u): where the centre of mass put the end-centre midpoint.
+    pure function alpha1_f(geom) result(alpha1)
+        type(geometry_t), intent(in) :: geom
+        real(kind = rk) :: alpha1
+        alpha1 = 0.5_rk * (geom%l(1) + geom%l(2)) / geom%u
+    end function alpha1_f
+
+    !> The scission map of (sigma2, sigma3, alpha2, alpha3), in units of u.
+    !!
+    !! sigma1_t = c1 + c2 with c_i = sqrt((2 +- alpha2)/(2 sigma3 +- alpha3)):
+    !! Moller's eq. 16, the two end spheroids touching pole to pole. For
+    !! sigma2 < 0 the a3^2 = 0 locus of the resolve, |l3 - l_i| =
+    !! c_i (1 + k_i/|sigma2|)^(1/2), gives sigma1_star = c1 (1 + k1/|s2|)^(1/2)
+    !! + c2 (1 + k2/|s2|)^(1/2); a spheroid or cylinder middle never pinches,
+    !! so for sigma2 >= 0 sigma1_star = 0 and defined = .false. sigma1 does not
+    !! enter; it is validated like every other output.
+    !!
+    !! @param[in]  params       [sigma1, sigma2, sigma3, alpha2, alpha3]
+    !! @param[out] sigma1_t     Touching-spheroids separation
+    !! @param[out] sigma1_star  Scission separation at this sigma2; 0 unless defined
+    !! @param[out] defined      .true. iff sigma2 < 0 and status is 0
+    !! @param[out] status       SHAPE_VALID or 100
+    pure subroutine scission_sigma1_s(params, sigma1_t, sigma1_star, defined, status)
+
+        real(kind = rk), intent(in) :: params(:)
+        real(kind = rk), intent(out) :: sigma1_t, sigma1_star
+        logical, intent(out) :: defined
+        integer(kind = ik), intent(out) :: status
+
+        real(kind = rk) :: s2, k1, k2, c1, c2
+
+        sigma1_t = 0.0_rk
+        sigma1_star = 0.0_rk
+        defined = .false.
+
+        call validate_coordinates_s(params, status)
+        if (status /= SHAPE_VALID) return
+
+        s2 = params(2)
+        k1 = params(3) + 0.5_rk * params(5)
+        k2 = params(3) - 0.5_rk * params(5)
+        c1 = sqrt((2.0_rk + params(4)) / (2.0_rk * params(3) + params(5)))
+        c2 = sqrt((2.0_rk - params(4)) / (2.0_rk * params(3) - params(5)))
+        sigma1_t = c1 + c2
+
+        if (s2 < 0.0_rk) then
+            sigma1_star = c1 * sqrt(1.0_rk + k1 / abs(s2)) + c2 * sqrt(1.0_rk + k2 / abs(s2))
+            defined = .true.
+        end if
+
+    end subroutine scission_sigma1_s
 
     !> g_i = k_i sigma2 / (k_i - sigma2): a3^2 = a_i^2 + g_i (l3 - l_i)^2 at join i.
     pure function join_g_f(k_end, s2) result(g)
