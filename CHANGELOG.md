@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Versions follow
 the git tags.
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-10-28
 
 First release: Nix's three-quadratic-surface shapes in Nix's coordinates
 `[sigma1, sigma2, sigma3, alpha2, alpha3]`, on the two-tier
